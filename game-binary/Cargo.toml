@@ -1,0 +1,28 @@
+[package]
+name = "game-binary"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[target.wasm32-unknown-unknown]
+runner = "wasm-server-runner"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy = { version = "0.11.3" }
+console_error_panic_hook = "0.1.7"
+
+# For use with debug builds.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+bevy = { version = "0.11.3", features = ["dynamic_linking"] }
+
+# For use with release builds.
+# [target.'cfg(not(wasm))'.dependencies]
+# bevy = { version = "0.11.3", features = ["dynamic_linking"] }
+
+[dependencies]
+game-library = { path = "../game-library" }
+bevy-inspector-egui = "0.20.0"
+leafwing-input-manager = "0.10.0"
+thiserror = "1.0.50"
+wasm-bindgen = "0.2.88"
