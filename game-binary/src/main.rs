@@ -1,3 +1,4 @@
+#[cfg(not(target_arch = "wasm32"))]
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
