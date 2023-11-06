@@ -10,6 +10,7 @@ fn main() {
     setup_global_tracing_subscriber();
     App::new()
         .add_plugins(DefaultPlugins)
+        .add_plugins(bevy_inspector_egui::quick::WorldInspectorPlugin::default())
         .add_systems(Startup, setup)
         .add_systems(Startup, hello_world)
         .run();
