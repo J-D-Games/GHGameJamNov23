@@ -16,6 +16,7 @@ impl<T> SaveEvent<T>
     where
     T: Send + Sync + 'static,
 {
+    /// Constructor for the SaveEvent::<T> event.
     pub fn new<P: SaveLoadPath + Send + Sync + 'static>(path: P) -> Self {
         Self { path_getter: Box::new(path), _pd: PhantomData }
     }
