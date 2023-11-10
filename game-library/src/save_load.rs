@@ -1,145 +1,141 @@
 //! Plugin for adding save/load functionality to the game
 
-use bevy::prelude::*;
+mod events;
+mod components;
+mod traits;
+mod paths;
+mod system_sets;
 
-struct SaveLoad {}
+use std::{fs::File, io::Write, marker::PhantomData};
+use bevy::{prelude::*, tasks::IoTaskPool};
+pub use crate::save_load::{components::*, events::*, paths::*, traits::*, system_sets::*};
 
-impl SaveLoad {
-    pub const USER_SESSION_FILE_PATH: &str = "";
-    pub const GAME_SESSION_FILE_PATH: &str = "";
+
+
+/// SaveLoad plugin for adding a save/load system to the game.
+/// The system looks for objects tagged with the Save<T> component. 
+/// Saving and loading is triggered by SaveEvent<T> and LoadEvent<T> respectively.
+/// Supplying SaveEvent<T>'s and LoadEvent<T>'s new function with a trait object that implements SaveLoadPath specifies the save/load path.
+/// This plugin will panic if Save<T> is attached to an entity containing components that implement Reflect, but not ReflectSerialize (such as Handle<M>)
+#[derive(Default)]
+pub struct SaveLoad<T> 
+    where
+    T: TypePath + Send + Sync + 'static,
+{
+    _pd: PhantomData<T>,
 }
 
-impl Plugin for SaveLoad {
+impl<T> Plugin for SaveLoad<T> 
+    where
+    T: TypePath + Default + Send + Sync + 'static,
+{
     fn build(&self, app: &mut App) {
-        app.register_type::<Save>()
-            .register_type::<GameSession>()
-            .register_type::<UserSession>()
-            .add_event::<SaveGameSessionEvent>()
-            .add_event::<SaveUserSessionEvent>()
-            .add_event::<LoadGameSessionEvent>()
-            .add_event::<LoadUserSessionEvent>()
-            .add_systems(Last, (save_game_session, save_user_session))
-            .add_systems(First, (load_game_session, load_user_session));
+        app.register_type::<Save<T>>()
+            .add_event::<SaveEvent<T>>()
+            .add_event::<SaveResultEvent<T>>()
+            .add_event::<LoadEvent<T>>()
+            .add_event::<LoadResultEvent<T>>()
+            .add_systems(Last, save::<T>.in_set(SaveSet))
+            .add_systems(First, load::<T>.in_set(LoadSet));
     }
 }
 
-fn save_game_session(
-    (world, mut ec_save_game_session): (&World, EventReader<SaveGameSessionEvent>),
-    query_filter: Query<Entity, (With<Save>, With<GameSession>, Without<UserSession>)>,
+fn save<T: TypePath + Default + Send + Sync + 'static>(
+    (world, mut ev_save): (&World, EventReader<SaveEvent<T>>),
+    query_filter: Query<Entity, With<Save<T>>>,
 ) {
-    if !ec_save_game_session.is_empty() {
-        let type_registry = world.resource::<AppTypeRegistry>().clone();
-        let scene_builder = DynamicSceneBuilder::from_world(&world)
-            .extract_entities(query_filter.iter())
-            .deny::<Save>()
-            .deny::<GameSession>()
-            .remove_empty_entities();
-        let dynamic_scene = scene_builder.build();
-        let save_data = dynamic_scene
-            .serialize_ron(&type_registry)
-            .expect("We should be able to serialize our scene.");
-        println!("{}", save_data.clone());
-        save_file("game_session", save_data);
-        ec_save_game_session.clear();
+    // If there are any new save events,
+    if !ev_save.is_empty() {
+        // Go through each of them,
+        for ev in ev_save.read() {
+            // Find all entities in the world containing the Save<T> component, remove the Save<T> component, and then remove empty entities and build the scene.
+            // (Without removing the Save<T> component, we would be saving entities that contain no information except that they should be saved, which is useless
+            // So we remove the component and can then remove empty entities. The Save<T> will be readded on in load::<T>())
+            let scene_builder = DynamicSceneBuilder::from_world(&world)
+                .deny::<Save<T>>()
+                .extract_entities(query_filter.iter())
+                .remove_empty_entities();
+            let dynamic_scene = scene_builder.build();
+            // Serialize the data. This will panic if there are any components that implement Reflect, but not ReflectSerialize (such as Handle<M>).
+            let save_data = dynamic_scene
+                .serialize_ron(&world.resource::<AppTypeRegistry>())
+                .expect("We should be able to serialize our scene.");
+
+            println!("{}", save_data.clone()); //Debug, remove later.
+            
+            // Save the file contents based on the path and file name passed in with the event.
+            save_file(format!("{}{}", ev.get_path(world), ev.get_file(world)), save_data);
+        }
     }
 }
 
-fn save_user_session(
-    (world, mut ec_save_user_session): (&World, EventReader<SaveUserSessionEvent>),
-    query_filter: Query<Entity, (With<Save>, With<UserSession>, Without<GameSession>)>,
-) {
-    if !ec_save_user_session.is_empty() {
-        let type_registry = world.resource::<AppTypeRegistry>().clone();
-        let scene_builder = DynamicSceneBuilder::from_world(&world)
-            .extract_entities(query_filter.iter())
-            .deny::<Save>()
-            .deny::<UserSession>()
-            .remove_empty_entities();
-        let dynamic_scene = scene_builder.build();
-        let save_data = dynamic_scene
-            .serialize_ron(&type_registry)
-            .expect("We should be able to serialize our scene.");
-        println!("{}", save_data.clone());
-        save_file("user_session", save_data);
-        ec_save_user_session.clear();
-    }
-}
-
-fn load_game_session(
+fn load<T: TypePath + Default + Send + Sync + 'static>(
     (mut commands, asset_server, mut ev_load_game_session): (
         Commands,
         Res<AssetServer>,
-        EventReader<LoadGameSessionEvent>,
+        EventReader<LoadEvent<T>>,
     ),
 ) {
 }
 
-fn load_user_session(
-    (mut commands, asset_server, mut ev_load_user_session): (
-        Commands,
-        Res<AssetServer>,
-        EventReader<LoadUserSessionEvent>,
-    ),
-) {
+fn save_file(file_path_name: String, file_contents: String) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        todo!("Wasm saving not yet implemented")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        IoTaskPool::get()
+            .spawn(async move {
+                File::create(file_path_name)
+                    .and_then(|mut file| file.write(file_contents.as_bytes()))
+            })
+            .detach();
+    }
 }
 
-fn save_file(file_name: &str, file_contents: String) {
-    // #[cfg(target_arch = "wasm32")]
-
-    // #[cfg(not(target_arch = "wasm32"))]
+fn load_file(file_path_name: &String) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        todo!("Wasm saving not yet implemented")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        todo!()
+    }
 }
 
-fn load_file(file_name: &str) {}
 
-/// Marker component for indicating that this entity should be saved. This marker does nothing on its own.
-/// Combine with either a GameSession or UserSession marker component to indicate how it should be saved.
-#[derive(Reflect, Default)]
-#[reflect(Component)]
-pub struct Save;
 
-impl Component for Save {
-    type Storage = bevy_ecs::component::SparseStorage;
+/// Module containing save/load types that are specific to this current game jam game.
+pub mod game_types {
+    use bevy::prelude::*;
+
+    /// Marker component for indicating that this entity should be saved and loaded with the game session.
+    /// This should be used for entities that are local to the current game session, such as the player, units, tiles, etc.
+    #[derive(Reflect, Default)]
+    #[reflect(Component)]
+    pub struct GameSession;
+
+    impl Component for GameSession {
+        type Storage = bevy_ecs::component::SparseStorage;
+    }
+
+    /// Marker component for indicating that this entity should be saved and loaded with the user session.
+    /// This should be used for entities that are permanent between game sessions, such as unlock progress.
+    #[derive(Reflect, Default)]
+    #[reflect(Component)]
+    pub struct UserSession;
+
+    impl Component for UserSession {
+        type Storage = bevy_ecs::component::SparseStorage;
+    }
 }
 
-/// Marker component for indicating that this entity should be saved and loaded with the game session.
-/// This should be used for entities that are local to the current game session, such as the player, units, tiles, etc.
-#[derive(Reflect, Default)]
-#[reflect(Component)]
-pub struct GameSession;
-
-impl Component for GameSession {
-    type Storage = bevy_ecs::component::SparseStorage;
-}
-
-/// Marker component for indicating that this entity should be saved and loaded with the user session.
-/// This should be used for entities that are permanent between game sessions, such as unlock progress.
-#[derive(Reflect, Default)]
-#[reflect(Component)]
-pub struct UserSession;
-
-impl Component for UserSession {
-    type Storage = bevy_ecs::component::SparseStorage;
-}
-
-/// Event type for saving the current game session.
-#[derive(Event)]
-pub struct SaveGameSessionEvent;
-
-/// Event type for saving the current user session.
-#[derive(Event)]
-pub struct SaveUserSessionEvent;
-
-/// Event type for loading the saved game session.
-#[derive(Event)]
-pub struct LoadGameSessionEvent;
-
-/// Event type for loading the saved user session.
-#[derive(Event)]
-pub struct LoadUserSessionEvent;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{*, game_types::*};
     use std::time::Duration;
 
     #[derive(Component, Default, Reflect)]
@@ -180,17 +176,25 @@ mod tests {
         score: u32,
     }
 
+    fn test_runner(mut app: App) {
+        for _ in 0..500000 {
+            app.update();
+        }
+    }
+
     #[test]
     fn test_save_load_game_session() {
         //Create a new app for our test
         let mut app = App::new();
         //Use the minimum amount of setup to get it ready to test our system.
         //In this case we must register reflected components/resources and add the event.
-        app.register_type::<ComponentA>()
+        app.set_runner(test_runner)
+            .register_type::<ComponentA>()
             .register_type::<ComponentB>()
             .register_type::<ResourceA>()
-            .add_event::<SaveGameSessionEvent>()
-            .add_systems(Last, save_game_session);
+            .add_plugins(TaskPoolPlugin::default())
+            .add_event::<SaveEvent<GameSession>>()
+            .add_systems(Last, save::<GameSession>);
 
         {
             //Setup our world with some example resources and entities.
@@ -207,8 +211,7 @@ mod tests {
                     _rot_y: 52.3,
                     _rot_z: 22.2,
                 },
-                Save,
-                GameSession,
+                Save::<GameSession>::default(),
             ));
             world.spawn((
                 ComponentC {
@@ -216,13 +219,11 @@ mod tests {
                     _rot_y: 52.3,
                     _rot_z: 22.2,
                 },
-                Save,
-                GameSession,
+                Save::<GameSession>::default(),
             ));
             world.spawn((ComponentA { x: 10, y: 11 },));
-            world.send_event(SaveGameSessionEvent);
-            // This will panic if our save function fails.
-            world.run_schedule(Last);
+            world.send_event(SaveEvent::<GameSession>::new(StaticPath::new("test/".to_string(), "test_file.scn.ron".to_string())));
         }
+        app.run();
     }
 }

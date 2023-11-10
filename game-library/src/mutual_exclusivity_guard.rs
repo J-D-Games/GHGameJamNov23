@@ -2,6 +2,8 @@
 
 use bevy::prelude::*;
 
+/// System that panics if the two provided components exist on an entity at the same time.
+/// It is recommended that you use the macro instead of using this function directly.
 pub fn mutually_exclusive_component_panic<A: Component, B: Component>(query: Query<(Entity, &A, &B, Option<&Name>)>) {
     if !query.is_empty() {
         let mut error = String::new();
@@ -19,6 +21,8 @@ pub fn mutually_exclusive_component_panic<A: Component, B: Component>(query: Que
     }
 }
 
+/// Macro that defines mutually exclusive components.
+/// Can be used on up to 16 components at once, limited by bevy's tuple nesting
 #[macro_export]
 macro_rules! define_mutually_exclusive_components {
     ( $firt_type:ty, $second_type:ty ) => {
